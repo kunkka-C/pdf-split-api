@@ -57,3 +57,8 @@ async def split_pdf(request: Request):
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+# ✅ 添加以下内容，Render 部署才会监听 8080 端口
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
