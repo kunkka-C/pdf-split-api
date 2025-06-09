@@ -7,30 +7,34 @@ import os
 import math
 import uuid
 import requests
-import traceback  # ✅ 记得导入
 
 app = FastAPI()
 
-# ✅ 推荐 Render 中用 /tmp/output
+# 输出目录（Render不允许写入项目根目录，写入/tmp）
 OUTPUT_DIR = "/tmp/output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# 提供访问已拆分文件的静态文件路径
 app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "PDF Split API is running."}
 
 @app.post("/split-pdf")
 async def split_pdf(request: Request):
     try:
         data = await request.json()
-        file = data.get("file")
+        file_url = data.get("file")
         ratio = float(data.get("ratio", 0))
 
-        if not file or not (0 < ratio < 1):
-            return JSONResponse(status_code=400, content={"error": "invalid input"})
+        if not file_url or not (0 < ratio < 1):
+            return JSONResponse(status_code=400, content={"error": "Invalid input. 'file' must be a valid URL and 'ratio' between 0 and 1."})
 
-        response = requests.get(file)
+        # 下载 PDF 文件
+        response = requests.get(file_url)
         if response.status_code != 200:
-            return JSONResponse(status_code=400, content={"error": "failed to download PDF"})
+            return JSONResponse(status_code=400, content={"error": f"Failed to download PDF: status code {response.status_code}"})
 
         file_bytes = response.content
         reader = PdfReader(BytesIO(file_bytes))
@@ -38,7 +42,7 @@ async def split_pdf(request: Request):
         step = math.floor(total_pages * ratio)
 
         if step < 1:
-            return JSONResponse(status_code=400, content={"error": "ratio too small"})
+            return JSONResponse(status_code=400, content={"error": "Ratio too small, resulting in 0 pages per split."})
 
         parts = []
         start = 0
@@ -50,17 +54,18 @@ async def split_pdf(request: Request):
                 writer.add_page(reader.pages[i])
 
             unique_id = uuid.uuid4().hex[:8]
-            file_name = f"split_part_{len(parts) + 1}_{unique_id}.pdf"
+            file_name = f"split_part_{len(parts)+1}_{unique_id}.pdf"
             file_path = os.path.join(OUTPUT_DIR, file_name)
 
             with open(file_path, "wb") as f:
                 writer.write(f)
 
+            public_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/files/{file_name}"
             parts.append({
                 "part": len(parts) + 1,
                 "file_name": file_name,
-                "pages": f"{start + 1}-{end}",
-                "url": f"https://pdf-split-api-hch8.onrender.com/files/{file_name}"
+                "pages": f"{start+1}-{end}",
+                "url": public_url
             })
 
             start = end
@@ -68,5 +73,4 @@ async def split_pdf(request: Request):
         return {"status": "success", "parts": parts}
 
     except Exception as e:
-        traceback.print_exc()  # ✅ 打印堆栈到 Render 日志中
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": f"Internal Server Error: {str(e)}"})
